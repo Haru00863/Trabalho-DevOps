@@ -1,0 +1,118 @@
+# MySQL: PVC + Deployment + Service.
+#
+# Por que Deployment e não StatefulSet? Aqui há UMA única réplica de banco,
+# então o Deployment atende e é mais simples. Para múltiplas réplicas (cluster
+# de banco) o correto seria StatefulSet (identidade estável + um PVC por pod),
+# idealmente com um operador de banco ou um serviço gerenciado.
+---
+# PVC: pedido de armazenamento persistente. O cluster atende com um PV
+# (StorageClass padrão). Os dados vivem no volume, não no pod; por isso apagar
+# o pod do MySQL não apaga os dados.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+  namespace: n3-haruoltramariludwig-joaovitorustunomiya
+  labels:
+    app: mysql
+spec:
+  accessModes:
+    - ReadWriteOnce   # montado por um nó de cada vez (suficiente para 1 réplica)
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  namespace: n3-haruoltramariludwig-joaovitorustunomiya
+  labels:
+    app: mysql
+spec:
+  replicas: 1
+  # Recreate: derruba o pod antigo ANTES de subir o novo. O padrão
+  # (RollingUpdate) subiria o novo enquanto o antigo ainda usa o volume, e dois
+  # MySQL no mesmo diretório de dados corrompem o banco.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mysql          # precisa ser igual aos labels do template abaixo
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: loja-secret
+                  key: MYSQL_ROOT_PASSWORD
+            - name: MYSQL_DATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: loja-config
+                  key: DB_NAME
+            - name: MYSQL_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: loja-config
+                  key: DB_USER
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: loja-secret
+                  key: DB_PASSWORD
+          volumeMounts:
+            - name: dados
+              mountPath: /var/lib/mysql
+              # subPath: alguns provisionadores criam "lost+found" na raiz do
+              # volume e o MySQL se recusa a iniciar em diretório não vazio.
+              subPath: mysql
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -uroot -p$MYSQL_ROOT_PASSWORD --silent"]
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -uroot -p$MYSQL_ROOT_PASSWORD --silent"]
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: dados
+          persistentVolumeClaim:
+            claimName: mysql-pvc
+---
+# Service do MySQL: nome DNS estável ("mysql") para a API. ClusterIP (padrão)
+# = acessível apenas dentro do cluster; o banco não deve ser exposto fora.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: n3-haruoltramariludwig-joaovitorustunomiya
+  labels:
+    app: mysql
+spec:
+  selector:
+    app: mysql            # seleciona os pods com este label
+  ports:
+    - port: 3306
+      targetPort: 3306

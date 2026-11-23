@@ -1,0 +1,22 @@
+# Arquivos que NÃO devem entrar no contexto de build da imagem.
+# Efeitos: build mais rápido, imagem menor e nenhum segredo vazando para dentro dela.
+
+# Dependências são instaladas dentro da imagem (npm install); levar a pasta local
+# poderia misturar binários compilados para outro sistema.
+node_modules
+npm-debug.log
+
+# Segredos e configuração local
+.env
+.env.*
+
+# Controle de versão e arquivos de editor/sistema
+.git
+.gitignore
+.vscode
+.DS_Store
+
+# O próprio Dockerfile e a documentação não são necessários dentro da imagem
+Dockerfile
+.dockerignore
+*.md

@@ -1,0 +1,8 @@
+# Namespace: isola todos os recursos deste trabalho dentro do cluster.
+# IMPORTANTE: troque "n3-haruoltramariludwig-joaovitorustunomiya" pelo seu namespace (em TODOS os arquivos):
+#   .\extras\trocar-namespace.ps1 -Novo n3-seunome1-seunome2     (PowerShell)
+# ou use "Replace in files" (Ctrl+Shift+H) no VS Code.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: n3-haruoltramariludwig-joaovitorustunomiya

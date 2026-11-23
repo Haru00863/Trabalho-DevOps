@@ -1,0 +1,10 @@
+# Nunca versionar segredos reais
+.env
+
+# Dependências e logs
+node_modules/
+npm-debug.log
+
+# Arquivos de sistema/editor
+.DS_Store
+.vscode/

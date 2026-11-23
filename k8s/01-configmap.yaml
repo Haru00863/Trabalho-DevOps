@@ -1,0 +1,18 @@
+# ConfigMap: configurações NÃO sensíveis da API.
+# Os valores viram variáveis de ambiente no pod (via envFrom no Deployment).
+# Repare nos nomes de host: "mysql" e "redis" são os nomes dos Services; o DNS
+# interno do cluster os resolve para o IP de cada Service.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loja-config
+  namespace: n3-haruoltramariludwig-joaovitorustunomiya
+  labels:
+    app.kubernetes.io/part-of: loja
+data:
+  PORT: "3000"
+  DB_HOST: mysql
+  DB_USER: app
+  DB_NAME: loja
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"

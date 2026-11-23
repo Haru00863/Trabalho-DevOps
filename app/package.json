@@ -1,0 +1,17 @@
+{
+  "name": "loja-api",
+  "version": "1.0.0",
+  "description": "API da Loja (Node.js + MySQL + Redis) - Atividade N3 DevOps & Cloud Computing",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "mysql2": "^3.11.0",
+    "redis": "^4.7.0"
+  }
+}

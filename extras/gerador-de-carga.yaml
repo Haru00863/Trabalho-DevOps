@@ -1,0 +1,38 @@
+# Gerador de carga para a demonstração do HPA (Parte 4, item 5).
+# Fica FORA da pasta k8s/ de propósito: "kubectl apply -f k8s/" não deve
+# subir um gerador de carga junto com a aplicação.
+#
+# Roda DENTRO do cluster, um laço que chama /carga pelo nome do Service
+# (loja-api, resolvido pelo DNS interno). São 3 réplicas do gerador para
+# produzir carga suficiente. Para parar: kubectl delete -f extras/gerador-de-carga.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gerador-de-carga
+  namespace: n3-haruoltramariludwig-joaovitorustunomiya
+  labels:
+    app: gerador-de-carga
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: gerador-de-carga
+  template:
+    metadata:
+      labels:
+        app: gerador-de-carga
+    spec:
+      containers:
+        - name: busybox
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - "while true; do wget -q -O- http://loja-api/carga > /dev/null; done"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 8Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi
