@@ -17,9 +17,10 @@
  *                 do Compose). Testa MySQL e Redis. Se falhar, o pod sai do
  *                 Service (não recebe tráfego), mas não é reiniciado.
  *
- * 3. Na inicialização, a API TENTA conectar ao MySQL várias vezes em vez de
- *    morrer na primeira falha. No Kubernetes não existe "depends_on": o banco
- *    pode demorar a ficar pronto, e a aplicação precisa tolerar isso.
+ * 3. A API abre a porta ANTES de conectar às dependências e tenta conectar ao
+ *    MySQL várias vezes em vez de morrer na primeira falha. No Kubernetes não
+ *    existe "depends_on": o banco pode demorar a ficar pronto, e a aplicação
+ *    precisa tolerar isso. Se o Redis cair, a API segue funcionando sem cache.
  *
  * 4. /carga existe só para a demonstração do HPA (Parte 4, item 5): consome
  *    CPU de propósito, porque chamadas simples a /health quase não gastam CPU
@@ -116,16 +117,23 @@ app.get('/', (_req, res) => {
 // Liveness: só diz que o processo responde.
 app.get('/live', (_req, res) => res.status(200).send('ok'));
 
+// Executa uma promessa com limite de tempo. Sem isso, um comando enviado a um
+// Redis fora do ar ficaria em fila (o cliente espera reconectar) e a requisição
+// travaria em vez de responder 503.
+const comTimeout = (promessa, ms = 2000) =>
+  Promise.race([promessa, new Promise((_, rejeita) => setTimeout(() => rejeita(new Error('timeout')), ms))]);
+
 // Readiness / healthcheck: verifica as dependências.
 app.get('/health', async (_req, res) => {
   const checks = { mysql: 'ok', redis: 'ok' };
   try {
-    await pool.query('SELECT 1');
+    await comTimeout(pool.query('SELECT 1'));
   } catch (err) {
     checks.mysql = 'falha';
   }
   try {
-    await redis.ping();
+    if (!redis.isReady) throw new Error('redis desconectado');
+    await comTimeout(redis.ping());
   } catch (err) {
     checks.redis = 'falha';
   }
@@ -133,15 +141,42 @@ app.get('/health', async (_req, res) => {
   res.status(saudavel ? 200 : 503).json({ status: saudavel ? 'ok' : 'degradado', checks });
 });
 
+// Helpers de cache: se o Redis estiver fora, a API continua funcionando só com
+// o MySQL (o cache é uma otimização, não requisito para responder).
+async function cacheLer(chave) {
+  if (!redis.isReady) return null;
+  try {
+    return await comTimeout(redis.get(chave));
+  } catch (err) {
+    return null;
+  }
+}
+async function cacheGravar(chave, valor) {
+  if (!redis.isReady) return;
+  try {
+    await comTimeout(redis.set(chave, valor, { EX: CACHE_TTL_SEGUNDOS }));
+  } catch (err) {
+    /* ignora: sem cache, apenas fica mais lento */
+  }
+}
+async function cacheApagar(chave) {
+  if (!redis.isReady) return;
+  try {
+    await comTimeout(redis.del(chave));
+  } catch (err) {
+    /* ignora */
+  }
+}
+
 // Lista produtos, com cache no Redis (padrão cache-aside).
 app.get('/produtos', async (_req, res) => {
   try {
-    const emCache = await redis.get(CACHE_KEY);
+    const emCache = await cacheLer(CACHE_KEY);
     if (emCache) {
       return res.json({ origem: 'redis', produtos: JSON.parse(emCache) });
     }
     const [linhas] = await pool.query('SELECT id, nome, preco FROM produtos ORDER BY id');
-    await redis.set(CACHE_KEY, JSON.stringify(linhas), { EX: CACHE_TTL_SEGUNDOS });
+    await cacheGravar(CACHE_KEY, JSON.stringify(linhas));
     res.json({ origem: 'mysql', produtos: linhas });
   } catch (err) {
     console.error('[GET /produtos]', err.message);
@@ -158,7 +193,7 @@ app.post('/produtos', async (req, res) => {
   try {
     // Query parametrizada (?) evita SQL injection.
     const [resultado] = await pool.query('INSERT INTO produtos (nome, preco) VALUES (?, ?)', [nome, preco]);
-    await redis.del(CACHE_KEY);
+    await cacheApagar(CACHE_KEY);
     res.status(201).json({ id: resultado.insertId, nome, preco });
   } catch (err) {
     console.error('[POST /produtos]', err.message);
@@ -169,10 +204,11 @@ app.post('/produtos', async (req, res) => {
 // Contador de visitas no Redis (operação atômica INCR).
 app.get('/visitas', async (_req, res) => {
   try {
-    const total = await redis.incr('visitas');
+    if (!redis.isReady) throw new Error('redis desconectado');
+    const total = await comTimeout(redis.incr('visitas'));
     res.json({ visitas: total });
   } catch (err) {
-    res.status(500).json({ erro: 'falha no redis' });
+    res.status(503).json({ erro: 'redis indisponível' });
   }
 });
 
@@ -190,10 +226,20 @@ app.get('/carga', (_req, res) => {
 // Start + encerramento limpo
 // ---------------------------------------------------------------------------
 async function main() {
-  await redis.connect();
-  await iniciarBanco();
+  // A porta é aberta PRIMEIRO. Assim /live responde mesmo com o banco e o Redis
+  // fora do ar, e /health devolve 503 até as dependências ficarem prontas.
   const servidor = app.listen(config.port, () => {
     console.log(`[api] versão ${config.version} ouvindo na porta ${config.port}`);
+  });
+
+  // Redis: conecta em segundo plano (sem await). O cliente reconecta sozinho
+  // enquanto o Redis não estiver disponível.
+  redis.connect().catch((err) => console.error('[redis] falha ao conectar:', err.message));
+
+  // MySQL: tenta criar a tabela com várias tentativas, também em segundo plano.
+  iniciarBanco().catch((err) => {
+    console.error('[api] falha fatal na inicialização:', err.message);
+    process.exit(1); // o orquestrador (Compose/K8s) reinicia o container
   });
 
   // O Kubernetes envia SIGTERM ao encerrar um pod (rollout, scale down).
